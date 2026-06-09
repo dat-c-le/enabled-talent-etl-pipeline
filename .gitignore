@@ -1,0 +1,19 @@
+# Credentials — never share these
+.env
+service_account.json
+*.key
+*.pem
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Raw extracted data (large, re-extractable from Census/BLS APIs)
+output/raw/
+
+# IDE
+.vscode/
+.idea/

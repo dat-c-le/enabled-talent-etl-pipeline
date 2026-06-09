@@ -1,0 +1,35 @@
+{
+  "_instructions": {
+    "how_to_find_series": [
+      "1. Go to https://data.bls.gov/dataQuery/find?st=0&r=20&q=disability&more=0",
+      "2. Search for 'disability' to browse available series.",
+      "3. Each series has an ID like 'LNU02074593'. Copy that ID into the lists below.",
+      "4. BLS API v2 allows up to 50 series per request and 20 years per request.",
+      "5. With a registered API key you get 500 requests/day; without key, 25/day."
+    ],
+    "series_id_format": {
+      "CPS_not_seasonally_adjusted": "LNU + measure_code + demographic_code",
+      "CPS_seasonally_adjusted":     "LNS + measure_code + demographic_code"
+    }
+  },
+  "cps_disability_national": {
+    "description": "National-level labor force statistics for persons with a disability, from the Current Population Survey (CPS). BLS publishes these annually in 'Persons with a Disability: Labor Force Characteristics'. NOTE: These are national-level only — CPS sample size is insufficient for state-level disability breakdowns.",
+    "start_year": "2008",
+    "series": {
+      "LNU01074593": "Civilian labor force — with a disability, 16 years and over, NSA",
+      "LNU02074593": "Employment level — with a disability, 16 years and over, NSA",
+      "LNU03074593": "Unemployment level — with a disability, 16 years and over, NSA",
+      "LNU04074593": "Unemployment rate — with a disability, 16 years and over, NSA",
+      "LNU01074601": "Civilian labor force — without a disability, 16 years and over, NSA",
+      "LNU02074601": "Employment level — without a disability, 16 years and over, NSA",
+      "LNU03074601": "Unemployment level — without a disability, 16 years and over, NSA",
+      "LNU04074601": "Unemployment rate — without a disability, 16 years and over, NSA"
+    },
+    "verification_url": "https://www.bls.gov/news.release/disabl.t01.htm",
+    "note": "Verify each series ID at https://data.bls.gov/dataQuery/search before running. Series IDs above are based on published BLS documentation but should be confirmed."
+  },
+  "additional_series": {
+    "description": "Add any additional BLS series IDs here in the same format as above.",
+    "series": {}
+  }
+}
