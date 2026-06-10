@@ -12,7 +12,7 @@ GCP_CREDENTIALS_PATH = os.getenv("GCP_CREDENTIALS_PATH", "service_account.json")
 
 # ── ACS ───────────────────────────────────────────────────────────────────────
 # ACS 1-year estimates; 2020 was not released due to COVID-19 data collection disruption.
-ACS_YEARS = [y for y in range(2010, 2024) if y != 2020]
+ACS_YEARS = [y for y in range(2010, 2025) if y != 2020]
 
 # "subject" tables use a different Census API endpoint than "detailed" tables.
 ACS_TABLES = {

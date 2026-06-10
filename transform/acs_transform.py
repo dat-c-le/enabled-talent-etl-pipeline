@@ -279,6 +279,73 @@ def _convert_e_percents(
     return df
 
 
+# ── Cross-year column normalization ───────────────────────────────────────────
+
+# Census rewrites S-table label hierarchies between releases, producing different
+# column names for the same concept across years.  These rules map older variants
+# to the canonical (2018+) label so BigQuery sees one consistent column name
+# for every year without needing COALESCE views.
+#
+# S1811 changes detected across 2010-2023:
+#   2010-2017  "[Group] | CLASS OF WORKER | [Category]"
+#   2018+      "[Group] | Employed Population Age 16 and Over | CLASS OF WORKER | [Category]"
+#
+#   2010-2016  "[Group] | EMPLOYMENT STATUS | [Status]"
+#   2017+      "[Group] | Population Age 16 and Over | EMPLOYMENT STATUS | [Status]"
+
+_S1811_GROUPS = (
+    "With a Disability",
+    "No Disability",
+    "Total Civilian Noninstitutionalized Population",
+)
+
+# (old_infix, canonical_infix) — matched after "{group} | "
+_S1811_INFIX_UPGRADES = (
+    (
+        "CLASS OF WORKER | ",
+        "Employed Population Age 16 and Over | CLASS OF WORKER | ",
+    ),
+    (
+        "EMPLOYMENT STATUS | ",
+        "Population Age 16 and Over | EMPLOYMENT STATUS | ",
+    ),
+)
+
+
+def _normalize_column_names(df: pd.DataFrame, table_id: str) -> pd.DataFrame:
+    """
+    Rename known Census label variants to their canonical names.
+    Operates on human-readable column names after the col_map rename step.
+    Safe to call on every table — no-ops for anything that isn't S1811.
+    """
+    if not table_id.upper().startswith("S1811"):
+        return df
+
+    rename_map: Dict[str, str] = {}
+    existing = set(df.columns)
+
+    for col in df.columns:
+        for grp in _S1811_GROUPS:
+            prefix = f"{grp} | "
+            if not col.startswith(prefix):
+                continue
+            remainder = col[len(prefix):]
+            for old_infix, new_infix in _S1811_INFIX_UPGRADES:
+                if remainder.startswith(old_infix):
+                    canonical = prefix + new_infix + remainder[len(old_infix):]
+                    # Only rename if the canonical name isn't already present
+                    # (both variants in one year would be a Census API anomaly).
+                    if canonical != col and canonical not in existing:
+                        rename_map[col] = canonical
+                    break
+            break  # a column can only start with one group prefix
+
+    if rename_map:
+        logger.info(f"  Normalized {len(rename_map)} column variants -> canonical labels")
+        df = df.rename(columns=rename_map)
+    return df
+
+
 # ── Geographic columns ────────────────────────────────────────────────────────
 
 def _add_geo_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -439,6 +506,11 @@ def transform_raw_file(
     data_cols = est_cols + pe_cols
     keep = geo_keep + [c for c in data_cols if c in df.columns]
     df = df[keep].rename(columns=col_map)
+
+    # Normalize label variants so the same concept gets the same column name
+    # across all years — Census periodically rewrites S-table label hierarchies.
+    table_id = meta.get("table_id", "")
+    df = _normalize_column_names(df, table_id)
 
     # Drop columns where every value is null:
     # - PE columns with no identifiable parent (conversion produced all NaN)
