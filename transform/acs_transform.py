@@ -279,6 +279,59 @@ def _convert_e_percents(
     return df
 
 
+def _convert_labeled_percents(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Second-pass percent-to-count conversion that runs AFTER the column rename and
+    normalization steps, operating on human-readable column names.
+
+    Needed for early S1811 years (2010-2016) where Census stored occupation/industry/
+    sector/employment breakdowns as E-suffix percentages using a flat label hierarchy.
+    The pre-rename detection in _find_e_percent_parents misses these because the raw
+    label chains don't show a parent-child relationship before normalization.
+
+    Logic: for each column whose non-null values are all ≤ 100, look for the longest
+    column-name prefix that matches another column in the DataFrame.  That other column
+    is the denominator.  Formula: count = (pct / 100) × parent_count.
+    """
+    # Build chain map: col_name → tuple of label parts
+    chains: Dict[str, tuple] = {col: tuple(col.split(" | ")) for col in df.columns}
+    chain_to_col: Dict[tuple, str] = {v: k for k, v in chains.items()}
+
+    converted = 0
+    for col, chain in chains.items():
+        if len(chain) <= 1:
+            continue
+        vals = df[col].dropna()
+        if len(vals) == 0 or vals.max() > 100.5:
+            continue  # Already a count or empty
+
+        # Find longest prefix that maps to a different column (the parent count).
+        best_parent: Optional[str] = None
+        best_len = 0
+        for k in range(1, len(chain)):
+            parent_col = chain_to_col.get(chain[:k])
+            if parent_col and parent_col != col and k > best_len:
+                best_len = k
+                best_parent = parent_col
+
+        if best_parent is None:
+            continue
+        parent_vals = df[best_parent].dropna()
+        if len(parent_vals) == 0 or parent_vals.max() <= 100.5:
+            continue  # Parent also looks like a percent — skip
+
+        df[col] = np.where(
+            df[col].isna() | df[best_parent].isna() | (df[best_parent] == 0),
+            np.nan,
+            (df[col] / 100.0) * df[best_parent],
+        )
+        converted += 1
+
+    if converted:
+        logger.info(f"  Post-normalize: converted {converted} percent columns to counts")
+    return df
+
+
 # ── Cross-year column normalization ───────────────────────────────────────────
 
 # Census rewrites S-table label hierarchies between releases, producing different
@@ -309,41 +362,261 @@ _S1811_INFIX_UPGRADES = (
         "EMPLOYMENT STATUS | ",
         "Population Age 16 and Over | EMPLOYMENT STATUS | ",
     ),
+    (
+        "OCCUPATION | ",
+        "Employed Population Age 16 and Over | OCCUPATION | ",
+    ),
+    (
+        "INDUSTRY | ",
+        "Employed Population Age 16 and Over | INDUSTRY | ",
+    ),
 )
+
+# 2018 S1810 uses "Subject" as a middle segment that no other year has.
+_S1810_2018_SUBJECT = "Subject"
+_S1810_TCNP = "Total civilian noninstitutionalized population"
+
+# Top-level categories that appear in C01/C02 labels WITHOUT the TCNP wrapper in 2010-2017.
+# Any label starting with one of these (for C01) or having one of these as the second
+# segment after "With a disability | " (for C02) needs TCNP inserted.
+_S1810_KNOWN_CATEGORIES = {
+    "SEX",
+    "AGE",
+    "RACE AND HISPANIC OR LATINO ORIGIN",
+    "DISABILITY TYPE BY DETAILED AGE",
+}
 
 
 def _normalize_column_names(df: pd.DataFrame, table_id: str) -> pd.DataFrame:
     """
     Rename known Census label variants to their canonical names.
     Operates on human-readable column names after the col_map rename step.
-    Safe to call on every table — no-ops for anything that isn't S1811.
     """
-    if not table_id.upper().startswith("S1811"):
-        return df
-
+    tid = table_id.upper()
     rename_map: Dict[str, str] = {}
     existing = set(df.columns)
 
-    for col in df.columns:
-        for grp in _S1811_GROUPS:
-            prefix = f"{grp} | "
-            if not col.startswith(prefix):
-                continue
-            remainder = col[len(prefix):]
-            for old_infix, new_infix in _S1811_INFIX_UPGRADES:
-                if remainder.startswith(old_infix):
-                    canonical = prefix + new_infix + remainder[len(old_infix):]
-                    # Only rename if the canonical name isn't already present
-                    # (both variants in one year would be a Census API anomaly).
-                    if canonical != col and canonical not in existing:
+    if tid.startswith("S1811"):
+        for col in df.columns:
+            for grp in _S1811_GROUPS:
+                prefix = f"{grp} | "
+                if not col.startswith(prefix):
+                    continue
+                remainder = col[len(prefix):]
+                for old_infix, new_infix in _S1811_INFIX_UPGRADES:
+                    if remainder.startswith(old_infix):
+                        canonical = prefix + new_infix + remainder[len(old_infix):]
+                        if canonical != col and canonical not in existing:
+                            rename_map[col] = canonical
+                        break
+                break
+
+    elif tid.startswith("S1810"):
+        for col in df.columns:
+            subj_pipe = f"{_S1810_2018_SUBJECT} | "
+
+            # ── 2018: "Subject" middle segment ─────────────────────────────────
+            if col.startswith(subj_pipe):
+                rest = col[len(subj_pipe):]
+                canonical = rest if rest.startswith(_S1810_TCNP) else f"{_S1810_TCNP} | {rest}"
+                if canonical not in existing:
+                    rename_map[col] = canonical
+
+            elif f" | {_S1810_2018_SUBJECT} | " in col:
+                if f" | {_S1810_2018_SUBJECT} | {_S1810_TCNP}" in col:
+                    canonical = col.replace(f" | {_S1810_2018_SUBJECT} | ", " | ")
+                else:
+                    canonical = col.replace(f" | {_S1810_2018_SUBJECT} | ", f" | {_S1810_TCNP} | ")
+                if canonical not in existing:
+                    rename_map[col] = canonical
+
+            # ── 2010-2017: C01 columns — TCNP wrapper missing ──────────────────
+            # Labels like "SEX | Male" or "AGE | 18 to 34 years" after label_to_column_name.
+            elif col.split(" | ")[0] in _S1810_KNOWN_CATEGORIES:
+                canonical = f"{_S1810_TCNP} | {col}"
+                canonical = canonical.replace(" | One Race | ", " | ")
+                if canonical not in existing:
+                    rename_map[col] = canonical
+
+            # ── 2010-2017: C02 columns — "With a disability | <cat> | ..." ─────
+            elif col.startswith("With a disability | "):
+                rest = col[len("With a disability | "):]
+                first_seg = rest.split(" | ")[0]
+                if first_seg == _S1810_TCNP:
+                    pass  # Already canonical.
+                elif first_seg in _S1810_KNOWN_CATEGORIES:
+                    canonical = f"With a disability | {_S1810_TCNP} | {rest}"
+                    canonical = canonical.replace(" | One Race | ", " | ")
+                    if canonical not in existing:
                         rename_map[col] = canonical
-                    break
-            break  # a column can only start with one group prefix
+                elif rest == "Hispanic or Latino (of any race)":
+                    # 2010-2017: Hispanic flat label not nested under RACE category.
+                    canonical = (f"With a disability | {_S1810_TCNP} | "
+                                 f"RACE AND HISPANIC OR LATINO ORIGIN | {rest}")
+                    if canonical not in existing:
+                        rename_map[col] = canonical
 
     if rename_map:
         logger.info(f"  Normalized {len(rename_map)} column variants -> canonical labels")
         df = df.rename(columns=rename_map)
     return df
+
+
+# ── Curated column schema ─────────────────────────────────────────────────────
+# Maps the canonical human-readable label → short output name for each table.
+# Only columns listed here survive into the cleaned CSV; everything else is dropped.
+# Applied after _normalize_column_names so canonical labels are guaranteed.
+
+_TABLE_SCHEMAS: Dict[str, Dict[str, str]] = {
+    # ── S1810: Disability Population & Demographics ────────────────────────────
+    "S1810": {
+        "Total civilian noninstitutionalized population":                                                                                              "pop_total",
+        "Total civilian noninstitutionalized population | SEX | Male":                                                                                 "pop_male",
+        "Total civilian noninstitutionalized population | SEX | Female":                                                                               "pop_female",
+        "Total civilian noninstitutionalized population | AGE | 18 to 34 years":                                                                       "pop_age_18_34",
+        "Total civilian noninstitutionalized population | AGE | 35 to 64 years":                                                                       "pop_age_35_64",
+        # 2010-2014 used coarser flat age buckets (no sub-breakdown into 18-34/35-64).
+        "Population 18 to 64 years":                                                                                                                   "pop_age_18_64",
+        "Population 65 years and over":                                                                                                                "pop_age_65_plus",
+        "With a disability | Total civilian noninstitutionalized population":                                                                           "dis_pop_total",
+        "With a disability | Total civilian noninstitutionalized population | SEX | Male":                                                              "dis_pop_male",
+        "With a disability | Total civilian noninstitutionalized population | SEX | Female":                                                            "dis_pop_female",
+        "With a disability | Total civilian noninstitutionalized population | RACE AND HISPANIC OR LATINO ORIGIN | White alone":                        "dis_pop_white",
+        "With a disability | Total civilian noninstitutionalized population | RACE AND HISPANIC OR LATINO ORIGIN | Black or African American alone":    "dis_pop_black",
+        "With a disability | Total civilian noninstitutionalized population | RACE AND HISPANIC OR LATINO ORIGIN | Asian alone":                        "dis_pop_asian",
+        "With a disability | Total civilian noninstitutionalized population | RACE AND HISPANIC OR LATINO ORIGIN | Hispanic or Latino (of any race)":   "dis_pop_hispanic",
+        "With a disability | Total civilian noninstitutionalized population | AGE | 18 to 34 years":                                                    "dis_pop_age_18_34",
+        "With a disability | Total civilian noninstitutionalized population | AGE | 35 to 64 years":                                                    "dis_pop_age_35_64",
+        "With a disability | Total civilian noninstitutionalized population | AGE | 65 to 74 years":                                                    "dis_pop_age_65_74",
+        # 2010-2014 flat age buckets.
+        "With a disability | Population 18 to 64 years":                                                                                               "dis_pop_age_18_64",
+        "With a disability | Population 65 years and over":                                                                                            "dis_pop_age_65_plus",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a hearing difficulty":             "dis_type_hearing_total",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a hearing difficulty | Population 18 to 64 years":        "dis_type_hearing_18_64",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a vision difficulty":              "dis_type_vision_total",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a vision difficulty | Population 18 to 64 years":         "dis_type_vision_18_64",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a cognitive difficulty":           "dis_type_cognitive_total",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a cognitive difficulty | Population 18 to 64 years":      "dis_type_cognitive_18_64",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With an ambulatory difficulty":         "dis_type_ambulatory_total",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With an ambulatory difficulty | Population 18 to 64 years":    "dis_type_ambulatory_18_64",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a self-care difficulty":           "dis_type_self_care_total",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With a self-care difficulty | Population 18 to 64 years":      "dis_type_self_care_18_64",
+        "With a disability | Total civilian noninstitutionalized population | DISABILITY TYPE BY DETAILED AGE | With an independent living difficulty | Population 18 to 64 years": "dis_type_indep_living_18_64",
+    },
+    # ── S1811: Employment, Sector, Industry, Education ─────────────────────────
+    "S1811": {
+        # Population & employment status
+        "Total Civilian Noninstitutionalized Population | Population Age 16 and Over":                                                                 "pop_16_plus",
+        "Total Civilian Noninstitutionalized Population | Employed Population Age 16 and Over":                                                        "pop_employed",
+        "With a Disability | Population Age 16 and Over":                                                                                              "dis_pop_16_plus",
+        "With a Disability | Population Age 16 and Over | EMPLOYMENT STATUS | Employed":                                                               "dis_employed",
+        "With a Disability | Population Age 16 and Over | EMPLOYMENT STATUS | Not in Labor Force":                                                     "dis_not_in_lf",
+        "With a Disability | Employed Population Age 16 and Over":                                                                                     "dis_employed_total",
+        "No Disability | Population Age 16 and Over":                                                                                                  "nodis_pop_16_plus",
+        "No Disability | Population Age 16 and Over | EMPLOYMENT STATUS | Employed":                                                                   "nodis_employed",
+        "No Disability | Employed Population Age 16 and Over":                                                                                         "nodis_employed_total",
+        # Class of worker (sector)
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Private for-profit wage and salary workers":                      "dis_sector_private_forprofit",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Employee of private company workers":                             "dis_sector_private_employee",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Self-employed in own incorporated business workers":              "dis_sector_self_emp_inc",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Private not-for-profit wage and salary workers":                  "dis_sector_nonprofit",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Local government workers":                                        "dis_sector_local_govt",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | State government workers":                                        "dis_sector_state_govt",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Federal government workers":                                      "dis_sector_federal_govt",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Self-employed in own not incorporated business workers":          "dis_sector_self_emp_uninc",
+        "With a Disability | Employed Population Age 16 and Over | CLASS OF WORKER | Unpaid family workers":                                           "dis_sector_unpaid_family",
+        # Occupation
+        "With a Disability | Employed Population Age 16 and Over | OCCUPATION | Management, business, science, and arts occupations":                  "dis_occ_management",
+        "With a Disability | Employed Population Age 16 and Over | OCCUPATION | Service occupations":                                                  "dis_occ_service",
+        "With a Disability | Employed Population Age 16 and Over | OCCUPATION | Sales and office occupations":                                         "dis_occ_sales_office",
+        "With a Disability | Employed Population Age 16 and Over | OCCUPATION | Natural resources, construction, and maintenance occupations":          "dis_occ_natural_resources",
+        "With a Disability | Employed Population Age 16 and Over | OCCUPATION | Production, transportation, and material moving occupations":          "dis_occ_production",
+        # Industry
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Agriculture, forestry, fishing and hunting, and mining":                 "dis_ind_agriculture",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Construction":                                                           "dis_ind_construction",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Manufacturing":                                                          "dis_ind_manufacturing",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Wholesale trade":                                                        "dis_ind_wholesale",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Retail trade":                                                           "dis_ind_retail",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Transportation and warehousing, and utilities":                          "dis_ind_transportation",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Information":                                                            "dis_ind_information",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Finance and insurance, and real estate and rental and leasing":          "dis_ind_finance",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Professional, scientific, and management, and administrative and waste management services": "dis_ind_professional",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Educational services, and health care and social assistance":            "dis_ind_education_health",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Arts, entertainment, and recreation, and accommodation and food services": "dis_ind_arts_food",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Other services (except public administration)":                          "dis_ind_other_services",
+        "With a Disability | Employed Population Age 16 and Over | INDUSTRY | Public administration":                                                  "dis_ind_public_admin",
+        # Education
+        "With a Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over":                                                                     "dis_edu_pop_25_plus",
+        "With a Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over | Less than high school graduate":                                    "dis_edu_less_than_hs",
+        "With a Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over | High school graduate (includes equivalency)":                       "dis_edu_hs_grad",
+        "With a Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over | Some college or associate's degree":                               "dis_edu_some_college",
+        "With a Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over | Bachelor's degree or higher":                                       "dis_edu_bachelors_plus",
+        "No Disability | EDUCATIONAL ATTAINMENT | Population Age 25 and Over | Bachelor's degree or higher":                                           "nodis_edu_bachelors_plus",
+        # Work from home
+        "With a Disability | COMMUTING TO WORK | Workers Age 16 and Over | Worked from home":                                                          "dis_work_from_home",
+        "No Disability | COMMUTING TO WORK | Workers Age 16 and Over | Worked from home":                                                              "nodis_work_from_home",
+    },
+    # ── B18120: Labor Force Status by Disability Type ──────────────────────────
+    "B18120": {
+        "Total":                                                                      "pop_total",
+        "In the labor force":                                                         "in_labor_force",
+        "In the labor force | Employed":                                              "employed_total",
+        "In the labor force | Employed | With a disability":                          "dis_employed",
+        "In the labor force | Employed | With a disability | With a hearing difficulty":          "dis_employed_hearing",
+        "In the labor force | Employed | With a disability | With a vision difficulty":           "dis_employed_vision",
+        "In the labor force | Employed | With a disability | With a cognitive difficulty":        "dis_employed_cognitive",
+        "In the labor force | Employed | With a disability | With an ambulatory difficulty":      "dis_employed_ambulatory",
+        "In the labor force | Employed | With a disability | With a self-care difficulty":        "dis_employed_self_care",
+        "In the labor force | Employed | With a disability | With an independent living difficulty": "dis_employed_indep_living",
+        "In the labor force | Employed | No disability":                              "nodis_employed",
+        "In the labor force | Unemployed | With a disability":                        "dis_unemployed",
+        "In the labor force | Unemployed | No disability":                            "nodis_unemployed",
+        "Not in labor force":                                                         "not_in_labor_force",
+        "Not in labor force | With a disability":                                     "dis_not_in_lf",
+        "Not in labor force | No disability":                                         "nodis_not_in_lf",
+    },
+    # ── B18121: Work Experience by Disability Type ─────────────────────────────
+    "B18121": {
+        "Total":                                                                      "pop_total",
+        "Worked full-time, year round":                                               "fulltime_total",
+        "Worked full-time, year round | With a disability":                           "dis_fulltime",
+        "Worked full-time, year round | With a disability | With a hearing difficulty":          "dis_fulltime_hearing",
+        "Worked full-time, year round | With a disability | With a vision difficulty":           "dis_fulltime_vision",
+        "Worked full-time, year round | With a disability | With a cognitive difficulty":        "dis_fulltime_cognitive",
+        "Worked full-time, year round | With a disability | With an ambulatory difficulty":      "dis_fulltime_ambulatory",
+        "Worked full-time, year round | With a disability | With a self-care difficulty":        "dis_fulltime_self_care",
+        "Worked full-time, year round | With a disability | With an independent living difficulty": "dis_fulltime_indep_living",
+        "Worked full-time, year round | No disability":                               "nodis_fulltime",
+        "Worked less than full-time, year round":                                     "parttime_total",
+        "Worked less than full-time, year round | With a disability":                 "dis_parttime",
+        "Worked less than full-time, year round | No disability":                     "nodis_parttime",
+        "Did not work":                                                               "did_not_work_total",
+        "Did not work | With a disability":                                           "dis_did_not_work",
+        "Did not work | No disability":                                               "nodis_did_not_work",
+    },
+}
+
+
+def _apply_column_schema(df: pd.DataFrame, table_id: str) -> pd.DataFrame:
+    """
+    Keep only whitelisted columns and rename them to short output names.
+    Geo columns are always preserved. No-op for unknown table IDs.
+    """
+    schema = _TABLE_SCHEMAS.get(table_id.upper())
+    if schema is None:
+        return df
+
+    geo_cols  = [c for c in df.columns if c in {
+        "year", "survey_type", "geo_id", "level",
+        "state", "state_fips", "county", "county_fips", "fips",
+    }]
+    data_keep = [c for c in df.columns if c in schema]
+
+    dropped = len(df.columns) - len(geo_cols) - len(data_keep)
+    if dropped:
+        logger.info(f"  Schema filter: kept {len(data_keep)} / {len(df.columns) - len(geo_cols)} data columns")
+
+    return df[geo_cols + data_keep].rename(columns=schema)
 
 
 # ── Geographic columns ────────────────────────────────────────────────────────
@@ -511,6 +784,14 @@ def transform_raw_file(
     # across all years — Census periodically rewrites S-table label hierarchies.
     table_id = meta.get("table_id", "")
     df = _normalize_column_names(df, table_id)
+
+    # Second-pass percent conversion on human-readable names.  Catches early-year
+    # S1811 labels where the pre-rename detection missed the parent-child relationship.
+    if table_id.upper().startswith("S1811"):
+        df = _convert_labeled_percents(df)
+
+    # Apply curated whitelist: keep only relevant columns and rename to short names.
+    df = _apply_column_schema(df, table_id)
 
     # Drop columns where every value is null:
     # - PE columns with no identifiable parent (conversion produced all NaN)

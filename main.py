@@ -107,6 +107,28 @@ def step_validate() -> None:
     run_validation(config.CLEANED_DIR, config.REPORTS_DIR)
 
 
+def step_combine() -> None:
+    import re
+    import pandas as pd
+    import config
+
+    logger.info("── COMBINE: ACS per-year → combined ──────────────────")
+    config.COMBINED_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Group cleaned CSVs by table ID (e.g., S1810, B18120).
+    groups: dict[str, list[Path]] = {}
+    for f in sorted(config.CLEANED_DIR.glob("acs_*_*_cleaned.csv")):
+        m = re.match(r"acs_([A-Za-z0-9]+)_\d{4}_cleaned\.csv", f.name)
+        if m:
+            groups.setdefault(m.group(1), []).append(f)
+
+    for table_id, files in groups.items():
+        out = config.COMBINED_DIR / f"acs_{table_id}_combined.csv"
+        df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+        df.to_csv(out, index=False)
+        logger.info(f"  Combined {len(files)} years → {out.name}  ({len(df):,} rows, {len(df.columns)} columns)")
+
+
 def step_load() -> None:
     import config
     logger.info("── LOAD → BigQuery ───────────────────────────────────")
@@ -124,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--step",
-        choices=["extract", "transform", "validate", "load", "all"],
+        choices=["extract", "transform", "combine", "validate", "load", "all"],
         default="all",
         help="Pipeline step to run (default: all)",
     )
@@ -150,6 +172,9 @@ def main() -> None:
 
     if args.step in ("transform", "all"):
         step_transform(args.source)
+
+    if args.step in ("combine", "all"):
+        step_combine()
 
     if args.step in ("validate", "all"):
         step_validate()
