@@ -23,7 +23,6 @@ An end-to-end data pipeline that extracts, transforms, and loads U.S. disability
 | Census ACS 1-Year | `acs_b18120` | State + County | 2010–2024 (no 2020) | Employment status by disability type |
 | Census ACS 1-Year | `acs_b18121` | State + County | 2010–2024 (no 2020) | Work experience and earnings by disability status |
 | BLS CPS | `bls_cps_disability` | National only | 2008–2024 | Monthly + annual disability labor force series |
-| BLS QCEW | `bls_qcew` | State | 2014–2024 (no 2020) | Total employment and wages by industry (NAICS 2-digit) |
 
 **ACS geography:** All 50 states + DC + Puerto Rico. County-level for counties with 65,000+ population. Filter `level = 'state'` for state-only analysis.
 
@@ -35,7 +34,7 @@ An end-to-end data pipeline that extracts, transforms, and loads U.S. disability
 
 - **Project:** `msba-capstone-498915`
 - **Dataset:** `disability_employment`
-- **Tables:** `acs_s1810`, `acs_s1811`, `acs_b18120`, `acs_b18121`, `bls_cps_disability`, `bls_qcew`
+- **Tables:** `acs_s1810`, `acs_s1811`, `acs_b18120`, `acs_b18121`, `bls_cps_disability`
 
 ---
 
@@ -147,27 +146,6 @@ The CPS dataset is in **tidy/long format** — one row per series × year × per
 
 ---
 
-## QCEW Dataset (`bls_qcew`)
-
-State-level employment and wages by 2-digit NAICS industry, all ownerships combined (private + federal + state + local).
-
-| Column | Description |
-|---|---|
-| `state_fips` | 2-digit state FIPS code (zero-padded string, e.g. `"06"` for California) |
-| `state_name` | State name |
-| `industry_code` | NAICS 2-digit code or QCEW aggregate (`10` = total all industries) |
-| `industry_title` | Industry name |
-| `year` | Calendar year |
-| `avg_monthly_employment` | Average monthly employment (persons) |
-| `avg_establishments` | Average number of establishments |
-| `total_annual_wages_usd` | Total wages paid in the year (USD) |
-| `avg_annual_pay_usd` | Average annual pay per worker (USD) |
-| `disclosure_code` | `N` = suppressed by BLS for confidentiality; employment/wage values are null |
-
-**Note:** 2010–2013 are not available — the BLS per-area CSV endpoint only provides data from 2014 onward.
-
----
-
 ## Key Metrics by Use Case
 
 ### National disability employment trends (monthly)
@@ -181,5 +159,3 @@ Use `acs_s1811` — filter `level = 'state'`. Key columns:
 ### Disability type breakdown
 Use `acs_b18120` — employment status broken down by disability type (hearing, vision, cognitive, ambulatory, self-care, independent living).
 
-### Industry employment context (state)
-Use `bls_qcew` — total employment and wages by industry and state. Join to ACS on `state_fips` and `year` for industry context alongside disability rates.

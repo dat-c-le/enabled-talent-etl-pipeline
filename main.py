@@ -74,16 +74,8 @@ def step_extract(source: str) -> None:
         run_acs_extraction(config.ACS_RAW_DIR)
 
     if source in ("bls", "all"):
-        logger.info("── EXTRACT: BLS QCEW ─────────────────────────────────")
-        logger.info(
-            f"Industries : {len(config.QCEW_INDUSTRY_CODES)} NAICS codes\n"
-            f"States     : {len(config.STATE_FIPS)} (50 states + DC + PR)\n"
-            f"Output     : {config.BLS_RAW_DIR}"
-        )
-        from extract.bls import run_qcew_extraction, run_cps_extraction
-        run_qcew_extraction(config.BLS_RAW_DIR)
-
         logger.info("── EXTRACT: BLS CPS disability series ────────────────")
+        from extract.bls import run_cps_extraction
         run_cps_extraction(config.BLS_RAW_DIR)
 
 

@@ -38,36 +38,6 @@ STATE_FIPS = [
     "49","50","51","53","54","55","56","72",
 ]
 
-# ── BLS / QCEW ────────────────────────────────────────────────────────────────
-# QCEW industry codes (2-digit NAICS sectors used by BLS QCEW).
-# "10" = Total, all industries (QCEW aggregate, not a NAICS sector).
-# "99" = Unclassified establishments.
-# Multi-sector groups (3133, 4445, 4849) are QCEW aggregate codes for
-# NAICS 31-33, 44-45, and 48-49 respectively.
-QCEW_INDUSTRY_CODES = [
-    "10",    # Total, all industries
-    "11",    # Agriculture, Forestry, Fishing and Hunting
-    "21",    # Mining, Quarrying, and Oil and Gas Extraction
-    "22",    # Utilities
-    "23",    # Construction
-    "3133",  # Manufacturing (NAICS 31, 32, 33)
-    "42",    # Wholesale Trade
-    "4445",  # Retail Trade (NAICS 44, 45)
-    "4849",  # Transportation and Warehousing (NAICS 48, 49)
-    "51",    # Information
-    "52",    # Finance and Insurance
-    "53",    # Real Estate and Rental and Leasing
-    "54",    # Professional, Scientific, and Technical Services
-    "55",    # Management of Companies and Enterprises
-    "56",    # Administrative and Support and Waste Management
-    "61",    # Educational Services
-    "62",    # Health Care and Social Assistance
-    "71",    # Arts, Entertainment, and Recreation
-    "72",    # Accommodation and Food Services
-    "81",    # Other Services (except Public Administration)
-    "92",    # Public Administration
-    "99",    # Unclassified establishments
-]
 
 # ── Output directories ────────────────────────────────────────────────────────
 OUTPUT_DIR      = Path("output")
