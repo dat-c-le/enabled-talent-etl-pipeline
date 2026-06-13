@@ -8,24 +8,26 @@ An end-to-end data pipeline that extracts, transforms, and loads U.S. disability
 
 ## What It Does
 
-1. **Extract** — Pulls ACS 1-year estimates from the U.S. Census Bureau API and employment data from the BLS API (2010–2023, skipping 2020)
-2. **Transform** — Cleans column names, converts percent values to actual counts, and combines state + county rows into a single file per table/year
+1. **Extract** — Pulls ACS 1-year estimates from the U.S. Census Bureau API, CPS disability series from the BLS API, and QCEW employment data from BLS flat files
+2. **Transform** — Cleans column names, converts percent values to actual counts, decodes dimension codes into readable labels, and standardizes formats across all sources
 3. **Load** — Uploads all cleaned data into Google BigQuery for querying and visualization
 
 ---
 
 ## Data Sources
 
-| Source | Tables | Description |
-|---|---|---|
-| Census ACS 1-Year | S1810 | Disability characteristics (population, type, demographics) |
-| Census ACS 1-Year | S1811 | Employment & earnings for people with disabilities |
-| Census ACS 1-Year | B18120 | Employment status by disability type |
-| Census ACS 1-Year | B18121 | Work experience and earnings by disability status |
-| BLS QCEW | — | State-level employment by industry (NAICS sectors) |
-| BLS CPS | — | National disability employment series |
+| Source | BigQuery Table | Geography | Years | Description |
+|---|---|---|---|---|
+| Census ACS 1-Year | `acs_s1810` | State + County | 2010–2024 (no 2020) | Disability characteristics — population, type, demographics |
+| Census ACS 1-Year | `acs_s1811` | State + County | 2010–2024 (no 2020) | Employment & earnings for people with disabilities |
+| Census ACS 1-Year | `acs_b18120` | State + County | 2010–2024 (no 2020) | Employment status by disability type |
+| Census ACS 1-Year | `acs_b18121` | State + County | 2010–2024 (no 2020) | Work experience and earnings by disability status |
+| BLS CPS | `bls_cps_disability` | National only | 2008–2024 | Monthly + annual disability labor force series |
+| BLS QCEW | `bls_qcew` | State | 2014–2024 (no 2020) | Total employment and wages by industry (NAICS 2-digit) |
 
-**Geography:** All 50 states + DC + Puerto Rico. County-level for ACS 1-year (counties with 65,000+ population).
+**ACS geography:** All 50 states + DC + Puerto Rico. County-level for counties with 65,000+ population. Filter `level = 'state'` for state-only analysis.
+
+**CPS note:** National totals only — no state breakdown. Disability-specific series are not seasonally adjusted by BLS (sample too small); general population totals include seasonally adjusted series.
 
 ---
 
@@ -33,9 +35,7 @@ An end-to-end data pipeline that extracts, transforms, and loads U.S. disability
 
 - **Project:** `msba-capstone-498915`
 - **Dataset:** `disability_employment`
-- **Tables:** `acs_s1810`, `acs_s1811`, `acs_b18120`, `acs_b18121`
-
-Each table has a `level` column (`state` or `county`) and a `year` column so all years are stored in one table. Filter to `level = 'state'` for state-level analysis.
+- **Tables:** `acs_s1810`, `acs_s1811`, `acs_b18120`, `acs_b18121`, `bls_cps_disability`, `bls_qcew`
 
 ---
 
@@ -43,21 +43,22 @@ Each table has a `level` column (`state` or `county`) and a `year` column so all
 
 ```
 ├── extract/
-│   ├── acs.py          # Census API extraction (ACS tables)
-│   └── bls.py          # BLS API extraction (QCEW + CPS)
+│   ├── acs.py              # Census API extraction (ACS tables)
+│   └── bls.py              # BLS extraction (QCEW flat files + CPS series)
 ├── transform/
-│   ├── acs_transform.py  # ACS cleaning, percent→count conversion, geo columns
-│   └── bls_transform.py  # BLS cleaning
+│   ├── acs_transform.py    # ACS cleaning, percent→count, geo columns
+│   └── bls_transform.py    # BLS cleaning, dimension decoding, percent→count
 ├── load/
-│   └── bigquery_loader.py  # BigQuery upload
-├── validate/
-│   └── report.py       # Data quality checks
+│   └── bigquery_loader.py  # BigQuery upload with column sanitization
 ├── output/
-│   └── cleaned/        # Cleaned CSVs (one per table × year)
-├── config.py           # Table list, years, paths, API config
-├── main.py             # Pipeline entry point
-├── .env.example        # Environment variable template
-└── requirements.txt    # Python dependencies
+│   ├── cleaned/            # Cleaned CSVs (ready for BigQuery)
+│   └── combined/           # ACS tables merged across all years
+├── scripts/                # Utility and one-off scripts
+├── bls_series.json         # CPS series configuration (815 series)
+├── config.py               # Table list, years, paths, API config
+├── main.py                 # Pipeline entry point
+├── .env.example            # Environment variable template
+└── requirements.txt        # Python dependencies
 ```
 
 ---
@@ -80,10 +81,6 @@ pip install -r requirements.txt
 ### 3. Configure environment variables
 
 Copy `.env.example` to `.env` and fill in your keys:
-
-```bash
-cp .env.example .env
-```
 
 ```
 CENSUS_API_KEY=your_key_here        # https://api.census.gov/data/key_signup.html
@@ -110,22 +107,79 @@ python main.py --step extract
 python main.py --step transform
 python main.py --step load
 
-# ACS only
+# Source-specific
 python main.py --step extract --source acs
+python main.py --step extract --source bls
 python main.py --step transform --source acs
+python main.py --step transform --source bls
 ```
 
-The cleaned CSVs in `output/cleaned/` are already included in this repo — you can skip straight to `--step load` if you just want to reload BigQuery.
+The cleaned CSVs in `output/cleaned/` are already committed to this repo — you can skip straight to `--step load` to reload BigQuery without re-extracting.
 
 ---
 
-## Key Metrics Available
+## CPS Disability Dataset (`bls_cps_disability`)
 
-| Metric | Table | Column |
-|---|---|---|
-| Disability population (16+) | `acs_s1811` | `with_a_disability_population_age_16_and_over` |
-| Employed with disability | `acs_s1811` | `with_a_disability_employed_population_age_16_and_over` |
-| Total disability population | `acs_s1810` | `number_with_a_disability_number_with_a_disability` |
-| Employment by disability type | `acs_b18120` | `in_the_labor_force_employed_with_a_disability` |
+The CPS dataset is in **tidy/long format** — one row per series × year × period.
 
-**Tip:** Use `with_a_disability_employed_population_age_16_and_over` for employment counts across all years (2010–2023). Other employment columns changed label names mid-series.
+### Key columns
+
+| Column | Description |
+|---|---|
+| `series_id` | BLS series ID (`LNU0` = not seasonally adjusted, `LNS1` = seasonally adjusted) |
+| `periodicity` | `M` monthly, `A` annual, `Q` quarterly |
+| `seasonal_adjustment` | Seasonally adjusted / Not seasonally adjusted |
+| `disability_status` | With disability / No disability / All persons |
+| `sex` | Both sexes / Men / Women |
+| `age_group` | 16 years and over, 16 to 64 years, 65 years and over, and sub-ranges |
+| `race_ethnicity` | All races/ethnicities / White / Black or African American / Asian / Hispanic or Latino |
+| `labor_force_status` | Employed / Unemployed / Unemployment rate / Labor force participation rate / Not in labor force / etc. |
+| `occupation` | Occupation group (Table 3 series, With/No disability, annual only) |
+| `industry` | Industry sector (Table 4 series, With disability, annual only) |
+| `class_of_worker` | Class of worker (Table 4 series, With disability, annual only) |
+| `nilf_subcategory` | NILF detail or education level (Table 5 series, With disability, annual only) |
+| `year` | Calendar year |
+| `period` | BLS period code: `M01`–`M12`, `Q01`–`Q04`, `A01` |
+| `date` | ISO date of the first day of the period |
+| `value` | Measured value — counts in thousands or percent (see `labor_force_status`) |
+
+**Occupation, industry, and class-of-worker values** are counts in thousands, converted from BLS percent distributions using the annual-average total employed as denominator.
+
+---
+
+## QCEW Dataset (`bls_qcew`)
+
+State-level employment and wages by 2-digit NAICS industry, all ownerships combined (private + federal + state + local).
+
+| Column | Description |
+|---|---|
+| `state_fips` | 2-digit state FIPS code (zero-padded string, e.g. `"06"` for California) |
+| `state_name` | State name |
+| `industry_code` | NAICS 2-digit code or QCEW aggregate (`10` = total all industries) |
+| `industry_title` | Industry name |
+| `year` | Calendar year |
+| `avg_monthly_employment` | Average monthly employment (persons) |
+| `avg_establishments` | Average number of establishments |
+| `total_annual_wages_usd` | Total wages paid in the year (USD) |
+| `avg_annual_pay_usd` | Average annual pay per worker (USD) |
+| `disclosure_code` | `N` = suppressed by BLS for confidentiality; employment/wage values are null |
+
+**Note:** 2010–2013 are not available — the BLS per-area CSV endpoint only provides data from 2014 onward.
+
+---
+
+## Key Metrics by Use Case
+
+### National disability employment trends (monthly)
+Use `bls_cps_disability` — filter `disability_status = 'With disability'` and `labor_force_status` to the metric of interest. Use `period` to select monthly (`M01`–`M12`) or annual (`A01`) data.
+
+### State-level disability employment
+Use `acs_s1811` — filter `level = 'state'`. Key columns:
+- `with_a_disability_employed_population_age_16_and_over` — employment count
+- `with_a_disability_unemployment_rate` — unemployment rate
+
+### Disability type breakdown
+Use `acs_b18120` — employment status broken down by disability type (hearing, vision, cognitive, ambulatory, self-care, independent living).
+
+### Industry employment context (state)
+Use `bls_qcew` — total employment and wages by industry and state. Join to ACS on `state_fips` and `year` for industry context alongside disability rates.
