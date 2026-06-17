@@ -1,0 +1,14 @@
+analysis,x_variable,y_variable,pearson_r,p_value,n
+Education vs Employment Rate,Bachelor's degree or higher,Disability employment rate (16+),0.5249573377591007,1.0957661399645443e-41,570
+Education vs Employment Rate,Some college / associate degree,Disability employment rate (16+),0.580941120713405,9.487036154955216e-53,570
+Education vs Employment Rate,"High school graduate, no college",Disability employment rate (16+),-0.11627834828824805,0.005445152187951544,570
+Education vs Employment Rate,Less than high school,Disability employment rate (16+),-0.7946361357627031,3.2365821927566986e-125,570
+Disability Type vs Employment Rate,Hearing difficulty prevalence,Overall disability employment rate (18-64),0.5896320572103066,3.68746635135952e-45,468
+Disability Type vs Employment Rate,Vision difficulty prevalence,Overall disability employment rate (18-64),0.307288595709894,1.0832522563148228e-11,468
+Disability Type vs Employment Rate,Cognitive difficulty prevalence,Overall disability employment rate (18-64),0.6103116805910076,4.242101529271465e-49,468
+Disability Type vs Employment Rate,Ambulatory difficulty prevalence,Overall disability employment rate (18-64),0.11584666971736848,0.012145323649418853,468
+Disability Type vs Employment Rate,Self-care difficulty prevalence,Overall disability employment rate (18-64),0.07375667959253396,0.11104695614016985,468
+Disability Type vs Employment Rate,Independent living difficulty prevalence,Overall disability employment rate (18-64),0.36373335148207464,4.372526328915118e-16,468
+Talent Pool Size vs Employment Rate,Talent pool size (raw count),Disability employment rate (16+),-0.26814114269134715,2.443326367954639e-13,721
+Talent Pool Size vs Employment Rate,Talent pool size (log),Disability employment rate (16+),-0.4103490542106535,1.1726399125364063e-30,721
+Talent Pool Size vs Employment Rate,Talent pool share of total population,Disability employment rate (16+),-0.39662547767926387,1.4097292986395537e-28,721
