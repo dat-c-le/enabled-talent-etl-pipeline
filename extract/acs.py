@@ -283,8 +283,11 @@ def extract_table_year(
     if csv_path.exists() and meta_path.exists() and not state_csv_path.exists():
         logger.info(f"Extracting state data (county cached): {table_id}/{year}")
         try:
-            geo_skip = {"NAME", "state", "county", "ucgid"}
-            all_vars = [c for c in pd.read_csv(csv_path, nrows=0).columns if c not in geo_skip]
+            # Only keep columns matching a real Census variable ID (e.g. B18120_001E,
+            # S1810_C01_001E). Excludes geo columns and stale merge artifacts like
+            # "NAME.1" left over from older cached CSVs.
+            var_pattern = re.compile(r"^[A-Z]\d+(_C\d+)?_\d+(E|M|PE|PM)$")
+            all_vars = [c for c in pd.read_csv(csv_path, nrows=0).columns if var_pattern.match(c)]
         except Exception as exc:
             logger.error(f"Cannot read county CSV headers for {table_id}/{year}: {exc}")
             return False
