@@ -24,6 +24,7 @@ BLS_API_V2 = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 
 _BLS_BATCH     = 50    # BLS v2 max series per request
 _BLS_YEAR_SPAN = 20    # BLS v2 max year range per request
+_REQUEST_DELAY = 0.5   # seconds between API calls to avoid rate limiting
 
 
 # ── QCEW ─────────────────────────────────────────────────────────────────────
