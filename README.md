@@ -159,3 +159,17 @@ Use `acs_s1811` — filter `level = 'state'`. Key columns:
 ### Disability type breakdown
 Use `acs_b18120` — employment status broken down by disability type (hearing, vision, cognitive, ambulatory, self-care, independent living).
 
+---
+
+## Contributors
+
+MSBA Capstone Team — George Mason University
+
+| Name | GitHub |
+|---|---|
+| Dat Le | [@dat-c-le](https://github.com/dat-c-le) |
+| Nicholas Asasouk | [@NicholasA2003](https://github.com/NicholasA2003) |
+| Ehtisham Khan | [@ekhan25](https://github.com/ekhan25) |
+| Niza Simunyola | [@nizasim2003-commits](https://github.com/nizasim2003-commits) |
+| Suleyman Karimov | [@sulik12345](https://github.com/sulik12345) |
+
